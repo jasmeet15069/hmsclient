@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useGuestPreferences } from '@/hooks/useGuestPreferences';
 import { AIConciergeChat } from '@/components/ai/AIConciergeChat';
 import { MenuSuggestionCard } from '@/components/ai/MenuSuggestionCard';
 import { GuestPreferencesDialog } from '@/components/guest/GuestPreferencesDialog';
@@ -36,6 +37,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
+import { COUNTRY_OPTIONS, formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
 
 interface Room {
   id: string;
@@ -85,17 +87,6 @@ interface PaymentConfig {
   mode_matches: boolean;
 }
 
-const COUNTRY_OPTIONS = [
-  { country: 'United States', currency: 'USD', locale: 'en-US' },
-  { country: 'India', currency: 'INR', locale: 'en-IN' },
-  { country: 'United Kingdom', currency: 'GBP', locale: 'en-GB' },
-  { country: 'European Union', currency: 'EUR', locale: 'de-DE' },
-  { country: 'United Arab Emirates', currency: 'AED', locale: 'en-AE' },
-  { country: 'Canada', currency: 'CAD', locale: 'en-CA' },
-  { country: 'Australia', currency: 'AUD', locale: 'en-AU' },
-  { country: 'Singapore', currency: 'SGD', locale: 'en-SG' },
-];
-
 const dateInputValue = (offsetDays: number) => {
   const date = new Date();
   date.setDate(date.getDate() + offsetDays);
@@ -105,6 +96,7 @@ const dateInputValue = (offsetDays: number) => {
 export default function GuestServicesPage() {
   const { user, signOut, isStaff } = useAuth();
   const { toast } = useToast();
+  const { preferences } = useGuestPreferences();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -123,6 +115,11 @@ export default function GuestServicesPage() {
     checkInDate: dateInputValue(0),
     checkOutDate: dateInputValue(1),
   });
+
+  useEffect(() => {
+    if (!preferences) return;
+    setBookingCountry(getCountryOption(preferences.country, preferences.currency).country);
+  }, [preferences?.country, preferences?.currency]);
 
   useEffect(() => {
     if (!isStaff) {
@@ -160,12 +157,8 @@ export default function GuestServicesPage() {
     }
 
     setIsRateLoading(true);
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8787/api'}/exchange-rate?base=USD&target=${selected.currency}`)
-      .then(response => response.json())
-      .then(payload => {
-        if (payload.error) throw new Error(payload.error);
-        setExchangeRate(Number(payload.data.rate));
-      })
+    getExchangeRate(selected.currency)
+      .then(rate => setExchangeRate(rate))
       .catch(error => {
         console.error('Error fetching exchange rate:', error);
         setExchangeRate(1);
@@ -262,12 +255,10 @@ export default function GuestServicesPage() {
 
   const selectedCountry = COUNTRY_OPTIONS.find(option => option.country === bookingCountry) || COUNTRY_OPTIONS[0];
 
-  const formatMoney = (amount: number, currency = selectedCountry.currency) =>
-    new Intl.NumberFormat(selectedCountry.locale, {
-      style: 'currency',
-      currency,
-      maximumFractionDigits: currency === 'JPY' || currency === 'KRW' ? 0 : 2,
-    }).format(amount);
+  const formatMoney = (amount: number, currency = selectedCountry.currency) => {
+    const option = currency === selectedCountry.currency ? selectedCountry : getCountryOption(null, currency);
+    return formatCurrency(amount, option);
+  };
 
   const handleStripeBooking = async (room: Room) => {
     if (!user?.id) return;
@@ -423,7 +414,7 @@ export default function GuestServicesPage() {
               <Button variant="outline" className="relative">
                 <UtensilsCrossed className="h-4 w-4 mr-2" />
                 Cart ({cart.length})
-                <span className="ml-2 font-bold">${cartTotal.toFixed(2)}</span>
+                <span className="ml-2 font-bold">{formatMoney(cartTotal * exchangeRate)}</span>
               </Button>
             )}
             <GuestPreferencesDialog />
@@ -496,7 +487,7 @@ export default function GuestServicesPage() {
                           <CardDescription>{getRoomTypeLabel(room.room_type)} • Floor {room.floor}</CardDescription>
                         </div>
                         <Badge variant="outline" className="bg-primary/10">
-                          ${room.price_per_night}/night
+                          {formatMoney(room.price_per_night * exchangeRate)}/night
                         </Badge>
                       </div>
                     </CardHeader>
@@ -698,7 +689,7 @@ export default function GuestServicesPage() {
                             <CardTitle className="text-base">{item.name}</CardTitle>
                             <CardDescription className="text-sm">{item.description}</CardDescription>
                           </div>
-                          <span className="font-bold">${item.price}</span>
+                          <span className="font-bold">{formatMoney(item.price * exchangeRate)}</span>
                         </div>
                       </CardHeader>
                       <CardContent>
@@ -722,7 +713,7 @@ export default function GuestServicesPage() {
                                   {option.name}
                                 </span>
                                 <span className="text-muted-foreground">
-                                  {Number(option.price) > 0 ? `+$${Number(option.price).toFixed(2)}` : 'Free'}
+                                  {Number(option.price) > 0 ? `+${formatMoney(Number(option.price) * exchangeRate)}` : 'Free'}
                                 </span>
                               </label>
                             ))}

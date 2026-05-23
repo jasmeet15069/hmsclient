@@ -14,6 +14,8 @@ import { GuestRoomStatus } from '@/components/guest/GuestRoomStatus';
 import { GuestBillingTab } from '@/components/guest/GuestBillingTab';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useGuestPreferences } from '@/hooks/useGuestPreferences';
+import { formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
 import { 
   UtensilsCrossed, 
   Clock, 
@@ -65,6 +67,7 @@ interface CartItem {
 export default function GuestDashboard() {
   const { user, signOut } = useAuth();
   const { toast } = useToast();
+  const { preferences } = useGuestPreferences();
   
   const [rooms, setRooms] = useState<Room[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -74,6 +77,22 @@ export default function GuestDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [isRefreshingMenu, setIsRefreshingMenu] = useState(false);
+  const [exchangeRate, setExchangeRate] = useState(1);
+  const selectedCountry = getCountryOption(preferences?.country, preferences?.currency);
+
+  useEffect(() => {
+    let cancelled = false;
+    getExchangeRate(selectedCountry.currency)
+      .then(rate => {
+        if (!cancelled) setExchangeRate(rate);
+      })
+      .catch(() => {
+        if (!cancelled) setExchangeRate(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCountry.currency]);
 
   useEffect(() => {
     fetchData();
@@ -203,7 +222,9 @@ export default function GuestDashboard() {
   };
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const convertedCartTotal = cartTotal * exchangeRate;
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const money = (usdAmount: number) => formatCurrency(Number(usdAmount || 0) * exchangeRate, selectedCountry);
 
   // Group menu by category
   const menuByCategory = menuItems.reduce((acc, item) => {
@@ -250,7 +271,7 @@ export default function GuestDashboard() {
               <Button variant="outline" className="relative gap-2">
                 <ShoppingCart className="h-4 w-4" />
                 <Badge variant="secondary">{cartCount}</Badge>
-                <span className="font-bold">${cartTotal.toFixed(2)}</span>
+                <span className="font-bold">{money(cartTotal)}</span>
               </Button>
             )}
             <GuestPreferencesDialog />
@@ -345,7 +366,7 @@ export default function GuestDashboard() {
                           <CardTitle className="text-base">Room {room.room_number}</CardTitle>
                           <CardDescription>{getRoomTypeLabel(room.room_type)}</CardDescription>
                         </div>
-                        <Badge variant="secondary">${room.price_per_night}/night</Badge>
+                        <Badge variant="secondary">{money(room.price_per_night)}/night</Badge>
                       </div>
                     </CardHeader>
                     <CardContent>
@@ -392,7 +413,7 @@ export default function GuestDashboard() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="font-medium">{cartCount} item(s) in cart</p>
-                      <p className="text-2xl font-bold">${cartTotal.toFixed(2)}</p>
+                      <p className="text-2xl font-bold">{formatCurrency(convertedCartTotal, selectedCountry)}</p>
                     </div>
                     <Button onClick={placeOrder} disabled={isPlacingOrder}>
                       {isPlacingOrder ? (
@@ -414,7 +435,7 @@ export default function GuestDashboard() {
                         <div key={item.id} className="flex items-center justify-between">
                           <span>{item.quantity}× {item.name}</span>
                           <div className="flex items-center gap-2">
-                            <span>${(item.price * item.quantity).toFixed(2)}</span>
+                            <span>{money(item.price * item.quantity)}</span>
                             <Button 
                               variant="ghost" 
                               size="icon" 
@@ -460,7 +481,7 @@ export default function GuestDashboard() {
                             <CardTitle className="text-base">{item.name}</CardTitle>
                             <CardDescription className="line-clamp-2">{item.description}</CardDescription>
                           </div>
-                          <span className="font-bold">${item.price}</span>
+                          <span className="font-bold">{money(item.price)}</span>
                         </div>
                       </CardHeader>
                       <CardContent>

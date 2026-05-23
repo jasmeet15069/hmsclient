@@ -6,6 +6,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { useGuestPreferences } from '@/hooks/useGuestPreferences';
+import { formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
 import { CreditCard, Loader2, Receipt, RefreshCw } from 'lucide-react';
 
 interface GuestStay {
@@ -35,10 +37,29 @@ const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8787/api';
 export function GuestBillingTab() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { preferences } = useGuestPreferences();
   const [stays, setStays] = useState<GuestStay[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPaying, setIsPaying] = useState<string | null>(null);
+  const [exchangeRate, setExchangeRate] = useState(1);
+  const selectedCountry = getCountryOption(preferences?.country, preferences?.currency);
+
+  useEffect(() => {
+    let cancelled = false;
+    getExchangeRate(selectedCountry.currency)
+      .then(rate => {
+        if (!cancelled) setExchangeRate(rate);
+      })
+      .catch(() => {
+        if (!cancelled) setExchangeRate(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCountry.currency]);
+
+  const money = (usdAmount: number) => formatCurrency(Number(usdAmount || 0) * exchangeRate, selectedCountry);
 
   const fetchBilling = useCallback(async () => {
     if (!user?.id) return;
@@ -122,7 +143,7 @@ export function GuestBillingTab() {
       const response = await fetch(`${apiBase}/payments/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payment_id: payment.id, currency: 'USD', country: 'United States' }),
+        body: JSON.stringify({ payment_id: payment.id, currency: selectedCountry.currency, country: selectedCountry.country }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || 'Unable to start checkout');
@@ -180,7 +201,7 @@ export function GuestBillingTab() {
             </div>
             <div className="flex justify-between pt-1">
               <span className="font-bold">Room Total</span>
-              <span className="text-xl font-bold">${Number(activeStay.total_amount || 0).toFixed(2)}</span>
+              <span className="text-xl font-bold">{money(Number(activeStay.total_amount || 0))}</span>
             </div>
 
             {(paymentsByStay[activeStay.id] || []).map(payment => (
@@ -225,7 +246,7 @@ export function GuestBillingTab() {
                 <div>
                   <p className="font-medium">{payment.payment_number}</p>
                   <p className="text-sm text-muted-foreground">
-                    Room {payment.guest_stays?.rooms?.room_number || 'N/A'} - ${Number(payment.amount).toFixed(2)}
+                    Room {payment.guest_stays?.rooms?.room_number || 'N/A'} - {money(Number(payment.amount))}
                   </p>
                 </div>
                 <Button onClick={() => handlePayNow(payment)} disabled={isPaying === payment.id}>
@@ -246,7 +267,7 @@ export function GuestBillingTab() {
               Stay History
             </CardTitle>
             <CardDescription>
-              {stays.length} stay(s) - ${totalBilled.toFixed(2)} total
+              {stays.length} stay(s) - {money(totalBilled)} total
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -266,7 +287,7 @@ export function GuestBillingTab() {
                     <TableCell className="text-sm">
                       {new Date(stay.check_in_date).toLocaleDateString()} - {new Date(stay.check_out_date).toLocaleDateString()}
                     </TableCell>
-                    <TableCell className="font-mono font-bold">${Number(stay.total_amount || 0).toFixed(2)}</TableCell>
+                    <TableCell className="font-mono font-bold">{money(Number(stay.total_amount || 0))}</TableCell>
                     <TableCell>
                       <Badge variant={stay.actual_check_out ? 'secondary' : 'default'}>
                         {stay.actual_check_out ? 'Completed' : stay.actual_check_in ? 'Active' : 'Upcoming'}

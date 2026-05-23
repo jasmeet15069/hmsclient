@@ -3,9 +3,11 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useGuestPreferences } from '@/hooks/useGuestPreferences';
-import { Settings, Loader2, Heart, AlertTriangle, Utensils } from 'lucide-react';
+import { COUNTRY_OPTIONS, DEFAULT_COUNTRY, getCountryOption } from '@/lib/currency';
+import { Settings, Loader2, Heart, AlertTriangle, Utensils, Globe2 } from 'lucide-react';
 
 export function GuestPreferencesDialog() {
   const {
@@ -22,6 +24,7 @@ export function GuestPreferencesDialog() {
   const [dietary, setDietary] = useState<string[]>([]);
   const [allergies, setAllergies] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [country, setCountry] = useState(DEFAULT_COUNTRY.country);
   const [notes, setNotes] = useState('');
 
   useEffect(() => {
@@ -29,6 +32,7 @@ export function GuestPreferencesDialog() {
       setDietary(preferences.dietary_restrictions || []);
       setAllergies(preferences.allergies || []);
       setFavorites(preferences.favorite_categories || []);
+      setCountry(getCountryOption(preferences.country, preferences.currency).country);
       setNotes(preferences.notes || '');
     }
   }, [preferences]);
@@ -42,10 +46,13 @@ export function GuestPreferencesDialog() {
   };
 
   const handleSave = async () => {
+    const selectedCountry = getCountryOption(country);
     const success = await savePreferences({
       dietary_restrictions: dietary,
       allergies: allergies,
       favorite_categories: favorites,
+      country: selectedCountry.country,
+      currency: selectedCountry.currency,
       notes: notes || null,
     });
     if (success) setIsOpen(false);
@@ -73,6 +80,26 @@ export function GuestPreferencesDialog() {
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Dietary Restrictions */}
+            <div>
+              <Label className="mb-3 flex items-center gap-2 text-base font-bold">
+                <Globe2 className="h-4 w-4" />
+                Country / Currency
+              </Label>
+              <Select value={country} onValueChange={setCountry}>
+                <SelectTrigger className="border-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTRY_OPTIONS.map(option => (
+                    <SelectItem key={option.country} value={option.country}>
+                      {option.country} ({option.currency})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* Dietary Restrictions */}
             <div>
               <Label className="mb-3 flex items-center gap-2 text-base font-bold">

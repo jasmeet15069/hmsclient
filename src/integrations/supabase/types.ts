@@ -112,7 +112,9 @@ export type Database = {
       guest_preferences: {
         Row: {
           allergies: string[] | null
+          country: string | null
           created_at: string
+          currency: string | null
           dietary_restrictions: string[] | null
           favorite_categories: string[] | null
           id: string
@@ -122,7 +124,9 @@ export type Database = {
         }
         Insert: {
           allergies?: string[] | null
+          country?: string | null
           created_at?: string
+          currency?: string | null
           dietary_restrictions?: string[] | null
           favorite_categories?: string[] | null
           id?: string
@@ -132,7 +136,9 @@ export type Database = {
         }
         Update: {
           allergies?: string[] | null
+          country?: string | null
           created_at?: string
+          currency?: string | null
           dietary_restrictions?: string[] | null
           favorite_categories?: string[] | null
           id?: string

@@ -9,6 +9,8 @@ export interface GuestPreferences {
   dietary_restrictions: string[];
   allergies: string[];
   favorite_categories: string[];
+  country: string;
+  currency: string;
   notes: string | null;
 }
 
@@ -73,6 +75,9 @@ export function useGuestPreferences() {
 
   useEffect(() => {
     fetchPreferences();
+    const refreshPreferences = () => fetchPreferences();
+    window.addEventListener('guest-preferences-updated', refreshPreferences);
+    return () => window.removeEventListener('guest-preferences-updated', refreshPreferences);
   }, [fetchPreferences]);
 
   const savePreferences = useCallback(async (updates: Partial<Omit<GuestPreferences, 'id' | 'user_id'>>) => {
@@ -96,6 +101,7 @@ export function useGuestPreferences() {
       }
 
       await fetchPreferences();
+      window.dispatchEvent(new Event('guest-preferences-updated'));
       toast({ title: 'Preferences saved', description: 'Your preferences have been updated.' });
       return true;
     } catch (error) {
