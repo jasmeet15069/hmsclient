@@ -261,7 +261,7 @@ export const supabase = {
       return { error: null };
     },
 
-    async updateUser(values: { password?: string }) {
+    async updateUser(values: { password?: string; current_password?: string }) {
       const session = readSession();
       const { data, error } = await apiRequest<AuthUser>('/auth/user', {
         method: 'PATCH',

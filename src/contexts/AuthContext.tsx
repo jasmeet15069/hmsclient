@@ -10,6 +10,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  refreshUser: () => Promise<void>;
   hasRole: (role: AppRole) => boolean;
   hasAnyRole: (roles: AppRole[]) => boolean;
   isStaff: boolean;
@@ -108,6 +109,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
   };
 
+  const refreshUser = async () => {
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (!currentSession?.user) return;
+    const userData = await fetchUserData(currentSession.user);
+    setSession(currentSession);
+    setUser(userData);
+  };
+
   const hasRole = (role: AppRole) => user?.roles.includes(role) || false;
   
   const hasAnyRole = (roles: AppRole[]) => roles.some(role => hasRole(role));
@@ -122,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       signUp,
       signOut,
+      refreshUser,
       hasRole,
       hasAnyRole,
       isStaff,

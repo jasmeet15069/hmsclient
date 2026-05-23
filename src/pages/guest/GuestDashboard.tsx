@@ -9,6 +9,7 @@ import { AIConciergeChat } from '@/components/ai/AIConciergeChat';
 import { VoiceAssistant } from '@/components/ai/VoiceAssistant';
 import { MenuSuggestionCard } from '@/components/ai/MenuSuggestionCard';
 import { GuestPreferencesDialog } from '@/components/guest/GuestPreferencesDialog';
+import { GuestProfileDialog } from '@/components/guest/GuestProfileDialog';
 import { OrderTracker } from '@/components/guest/OrderTracker';
 import { GuestRoomStatus } from '@/components/guest/GuestRoomStatus';
 import { GuestBillingTab } from '@/components/guest/GuestBillingTab';
@@ -274,6 +275,7 @@ export default function GuestDashboard() {
                 <span className="font-bold">{money(cartTotal)}</span>
               </Button>
             )}
+            <GuestProfileDialog />
             <GuestPreferencesDialog />
             <Button variant="outline" size="icon" onClick={() => setShowVoice(true)} title="Voice Assistant">
               <Mic className="h-4 w-4" />

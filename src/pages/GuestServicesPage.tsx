@@ -15,6 +15,7 @@ import { useGuestPreferences } from '@/hooks/useGuestPreferences';
 import { AIConciergeChat } from '@/components/ai/AIConciergeChat';
 import { MenuSuggestionCard } from '@/components/ai/MenuSuggestionCard';
 import { GuestPreferencesDialog } from '@/components/guest/GuestPreferencesDialog';
+import { GuestProfileDialog } from '@/components/guest/GuestProfileDialog';
 import { GuestBillingTab } from '@/components/guest/GuestBillingTab';
 import { OrderTracker } from '@/components/guest/OrderTracker';
 import { 
@@ -417,6 +418,7 @@ export default function GuestServicesPage() {
                 <span className="ml-2 font-bold">{formatMoney(cartTotal * exchangeRate)}</span>
               </Button>
             )}
+            <GuestProfileDialog />
             <GuestPreferencesDialog />
             <Button variant="outline" onClick={() => setShowConcierge(true)}>
               <Sparkles className="h-4 w-4 mr-2" />
