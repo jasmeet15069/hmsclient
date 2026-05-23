@@ -85,20 +85,11 @@ export function useGuestPreferences() {
 
     setIsSaving(true);
     try {
-      if (preferences) {
-        const { error } = await supabase
-          .from('guest_preferences')
-          .update(updates)
-          .eq('user_id', user.id);
+      const { error } = await supabase
+        .from('guest_preferences')
+        .insert({ user_id: user.id, ...updates });
 
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('guest_preferences')
-          .insert({ user_id: user.id, ...updates });
-
-        if (error) throw error;
-      }
+      if (error) throw error;
 
       await fetchPreferences();
       window.dispatchEvent(new Event('guest-preferences-updated'));
@@ -106,12 +97,13 @@ export function useGuestPreferences() {
       return true;
     } catch (error) {
       console.error('Error saving preferences:', error);
-      toast({ title: 'Error', description: 'Failed to save preferences.', variant: 'destructive' });
+      const message = error instanceof Error ? error.message : 'Failed to save preferences.';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
       return false;
     } finally {
       setIsSaving(false);
     }
-  }, [user?.id, preferences, fetchPreferences, toast]);
+  }, [user?.id, fetchPreferences, toast]);
 
   return {
     preferences,

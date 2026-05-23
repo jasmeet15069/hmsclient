@@ -37,6 +37,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .select('role')
       .eq('user_id', authUser.id);
 
+    if (!profile && (!rolesData || rolesData.length === 0)) {
+      throw new Error('Session user was not found in the current database');
+    }
+
     // If no roles found (empty array or null), default to guest
     const roles = (rolesData && rolesData.length > 0 
       ? rolesData.map(r => r.role) 
@@ -51,6 +55,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const clearInvalidSession = async () => {
+      await supabase.auth.signOut();
+      setSession(null);
+      setUser(null);
+      setLoading(false);
+    };
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, currentSession) => {
@@ -59,9 +70,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (currentSession?.user) {
           // Use setTimeout to prevent potential race conditions
           setTimeout(async () => {
-            const userData = await fetchUserData(currentSession.user);
-            setUser(userData);
-            setLoading(false);
+            try {
+              const userData = await fetchUserData(currentSession.user);
+              setUser(userData);
+              setLoading(false);
+            } catch (error) {
+              console.warn('Clearing invalid guest session:', error);
+              await clearInvalidSession();
+            }
           }, 0);
         } else {
           setUser(null);
@@ -73,11 +89,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // THEN check for existing session
     supabase.auth.getSession().then(({ data: { session: existingSession } }) => {
       if (existingSession?.user) {
-        fetchUserData(existingSession.user).then(userData => {
-          setSession(existingSession);
-          setUser(userData);
-          setLoading(false);
-        });
+        fetchUserData(existingSession.user)
+          .then(userData => {
+            setSession(existingSession);
+            setUser(userData);
+            setLoading(false);
+          })
+          .catch(async error => {
+            console.warn('Clearing invalid guest session:', error);
+            await clearInvalidSession();
+          });
       } else {
         setLoading(false);
       }
