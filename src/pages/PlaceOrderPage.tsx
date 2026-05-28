@@ -70,7 +70,7 @@ export default function PlaceOrderPage() {
 
     setIsRateLoading(true);
     setRateError(null);
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8787/api'}/exchange-rate?base=USD&target=${selectedCountry.currency}`)
+    fetch(`${import.meta.env.VITE_API_URL || '/api'}/exchange-rate?base=USD&target=${selectedCountry.currency}`)
       .then(response => response.json())
       .then(payload => {
         if (cancelled) return;

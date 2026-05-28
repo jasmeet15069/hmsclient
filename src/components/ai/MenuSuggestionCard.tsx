@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,15 @@ interface MenuItem {
 
 interface MenuSuggestionCardProps {
   menuItems: MenuItem[];
+  preferences?: {
+    dietary_restrictions?: string[];
+    allergies?: string[];
+    favorite_categories?: string[];
+    notes?: string | null;
+  } | null;
+  autoSuggest?: boolean;
+  formatMoney?: (amount: number) => string;
+  onOpenPreferences?: () => void;
   onSelectItem?: (itemId: string) => void;
 }
 
@@ -24,10 +34,21 @@ const confidenceColors = {
   low: 'border-muted-foreground bg-muted text-muted-foreground',
 };
 
-export function MenuSuggestionCard({ menuItems, onSelectItem }: MenuSuggestionCardProps) {
+export function MenuSuggestionCard({ menuItems, preferences, autoSuggest = false, formatMoney, onOpenPreferences, onSelectItem }: MenuSuggestionCardProps) {
   const { suggestions, isLoading, error, getSuggestions, clearSuggestions } = useMenuSuggestions();
+  const autoRequested = useRef(false);
+
+  const hasPreferences = useMemo(() => {
+    return Boolean(
+      (preferences?.dietary_restrictions?.length || 0) > 0 ||
+      (preferences?.allergies?.length || 0) > 0 ||
+      (preferences?.favorite_categories?.length || 0) > 0 ||
+      preferences?.notes
+    );
+  }, [preferences]);
 
   const handleGetSuggestions = () => {
+    if (menuItems.length === 0) return;
     getSuggestions(
       menuItems.map(item => ({
         id: item.id,
@@ -36,10 +57,40 @@ export function MenuSuggestionCard({ menuItems, onSelectItem }: MenuSuggestionCa
         price: item.price,
         description: item.description,
       })),
-      { favoriteCategories: ['Main Course'] },
+      {
+        dietaryRestrictions: preferences?.dietary_restrictions || [],
+        allergies: preferences?.allergies || [],
+        favoriteCategories: preferences?.favorite_categories || [],
+        notes: preferences?.notes || '',
+      },
       []
     );
   };
+
+  useEffect(() => {
+    if (!autoSuggest || autoRequested.current || !hasPreferences || menuItems.length === 0) return;
+    autoRequested.current = true;
+    handleGetSuggestions();
+  }, [autoSuggest, hasPreferences, menuItems.length]);
+
+  if (!hasPreferences) {
+    return (
+      <Card className="border-2 border-dashed border-primary/50 bg-primary/5">
+        <CardContent className="flex flex-col items-center justify-center p-6 text-center">
+          <Sparkles className="mb-3 h-8 w-8 text-primary" />
+          <h3 className="mb-2 font-bold">Recommended for You</h3>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Set your dining preferences to get personalised menu recommendations.
+          </p>
+          {onOpenPreferences && (
+            <Button variant="outline" onClick={onOpenPreferences}>
+              Set Preferences
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (!suggestions && !isLoading) {
     return (
@@ -129,7 +180,7 @@ export function MenuSuggestionCard({ menuItems, onSelectItem }: MenuSuggestionCa
                 <p className="mt-1 text-sm text-muted-foreground">{rec.reason}</p>
               </div>
               {menuItem && (
-                <span className="font-bold">${menuItem.price.toFixed(2)}</span>
+                <span className="font-bold">{formatMoney ? formatMoney(menuItem.price) : `$${menuItem.price.toFixed(2)}`}</span>
               )}
             </div>
           );

@@ -32,7 +32,7 @@ interface Payment {
   guest_stays?: { guest_id?: string; guest_name: string; rooms?: { room_number: string } | null } | null;
 }
 
-const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8787/api';
+const apiBase = import.meta.env.VITE_API_URL || '/api';
 
 export function GuestBillingTab() {
   const { user } = useAuth();

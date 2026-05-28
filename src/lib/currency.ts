@@ -37,7 +37,7 @@ export function formatCurrency(amount: number, option: CountryCurrency) {
 
 export async function getExchangeRate(target: string) {
   if (target === 'USD') return 1;
-  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8787/api';
+  const apiBase = import.meta.env.VITE_API_URL || '/api';
   const response = await fetch(`${apiBase}/exchange-rate?base=USD&target=${target}`);
   const payload = await response.json();
   if (!response.ok || payload.error || !payload.data?.rate) {

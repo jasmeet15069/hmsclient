@@ -9,9 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useGuestPreferences } from '@/hooks/useGuestPreferences';
+import { useHotelBranding } from '@/hooks/useHotelBranding';
 import { AIConciergeChat } from '@/components/ai/AIConciergeChat';
 import { MenuSuggestionCard } from '@/components/ai/MenuSuggestionCard';
 import { GuestPreferencesDialog } from '@/components/guest/GuestPreferencesDialog';
@@ -36,6 +38,7 @@ import {
   CheckCircle2,
   Users,
   Loader2,
+  Home,
 } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
 import { COUNTRY_OPTIONS, formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
@@ -81,11 +84,28 @@ interface CartItem {
   customizations: MenuCustomization[];
 }
 
+interface GuestStay {
+  id: string;
+  room_id: string;
+  guest_name: string;
+  guest_email: string | null;
+  guest_phone: string | null;
+  check_in_date: string;
+  check_out_date: string;
+  actual_check_in: string | null;
+  actual_check_out: string | null;
+  total_amount: number | null;
+  rooms?: { room_number: string; room_type?: string | null } | null;
+}
+
 interface PaymentConfig {
   stripe_configured: boolean;
   mode: 'live' | 'test' | null;
   publishable_mode: 'live' | 'test' | null;
   mode_matches: boolean;
+  active_gateway?: 'none' | 'stripe' | 'razorpay' | 'cash' | 'card' | 'bank_transfer';
+  default_currency?: string;
+  razorpay_configured?: boolean;
 }
 
 const dateInputValue = (offsetDays: number) => {
@@ -98,11 +118,16 @@ export default function GuestServicesPage() {
   const { user, signOut, isStaff } = useAuth();
   const { toast } = useToast();
   const { preferences } = useGuestPreferences();
+  const { branding } = useHotelBranding();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [activeStay, setActiveStay] = useState<GuestStay | null>(null);
+  const [activeTab, setActiveTab] = useState('rooms');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string[]>>({});
   const [showConcierge, setShowConcierge] = useState(false);
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [housekeepingNotes, setHousekeepingNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [bookingCountry, setBookingCountry] = useState(COUNTRY_OPTIONS[0].country);
   const [exchangeRate, setExchangeRate] = useState(1);
@@ -123,6 +148,11 @@ export default function GuestServicesPage() {
   }, [preferences?.country, preferences?.currency]);
 
   useEffect(() => {
+    if (preferences) return;
+    setBookingCountry(getCountryOption(branding.country, branding.currency).country);
+  }, [branding.country, branding.currency, preferences]);
+
+  useEffect(() => {
     if (!isStaff) {
       fetchData();
       fetchPaymentConfig();
@@ -141,7 +171,7 @@ export default function GuestServicesPage() {
 
   const fetchPaymentConfig = async () => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8787/api'}/payment-config`);
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/payment-config`);
       const payload = await response.json();
       setPaymentConfig(payload.data || null);
     } catch (error) {
@@ -206,6 +236,26 @@ export default function GuestServicesPage() {
       })) || [];
 
       setMenuItems(formattedMenu);
+
+      if (user?.id) {
+        const { data: staysData } = await supabase
+          .from('guest_stays')
+          .select('*, rooms(room_number, room_type)')
+          .eq('guest_id', user.id)
+          .order('check_in_date', { ascending: false });
+
+        const currentStay = ((staysData || []) as GuestStay[]).find(stay => !stay.actual_check_out) || null;
+        setActiveStay(currentStay);
+        if (currentStay) {
+          setBookingDetails(prev => ({
+            ...prev,
+            guestName: currentStay.guest_name || prev.guestName,
+            guestEmail: currentStay.guest_email || prev.guestEmail,
+            guestPhone: currentStay.guest_phone || prev.guestPhone,
+          }));
+          setActiveTab(current => current === 'rooms' ? 'my-stay' : current);
+        }
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -264,10 +314,19 @@ export default function GuestServicesPage() {
   const handleStripeBooking = async (room: Room) => {
     if (!user?.id) return;
 
+    if (paymentConfig?.active_gateway && paymentConfig.active_gateway !== 'stripe') {
+      toast({
+        title: 'Online card payment is not active',
+        description: `${paymentConfig.active_gateway.replace('_', ' ')} is selected for this hotel. Use Hold Room or ask reception for payment instructions.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     if (!paymentConfig?.stripe_configured) {
       toast({
         title: 'Stripe is not configured',
-        description: 'Add STRIPE_SECRET_KEY to the backend .env file, then restart the Python server.',
+        description: 'Ask the hotel admin to add Stripe keys in Portal Settings > Payments.',
         variant: 'destructive',
       });
       return;
@@ -293,7 +352,7 @@ export default function GuestServicesPage() {
 
     setIsCheckingOut(true);
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8787/api'}/bookings/checkout`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/bookings/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -376,6 +435,50 @@ export default function GuestServicesPage() {
     }
   };
 
+  const handleHousekeepingRequest = async (notes = housekeepingNotes) => {
+    if (!activeStay?.id) {
+      toast({
+        title: 'No active stay',
+        description: 'Housekeeping requests are available after a room is booked or checked in.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/housekeeping/guest-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guest_stay_id: activeStay.id,
+          request_type: 'guest_request',
+          notes,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || 'Unable to create housekeeping request');
+      setHousekeepingNotes('');
+      toast({
+        title: 'Housekeeping requested',
+        description: "Your request has been sent. We'll attend to your room shortly.",
+      });
+    } catch (error) {
+      toast({
+        title: 'Request failed',
+        description: error instanceof Error ? error.message : 'Unable to send housekeeping request.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleRequestCheckout = () => {
+    toast({
+      title: 'Checkout request received',
+      description: 'Please review your bill. Reception will confirm the final checkout balance.',
+    });
+    setActiveTab('billing');
+  };
+
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const getRoomTypeLabel = (type: string) => {
@@ -387,6 +490,10 @@ export default function GuestServicesPage() {
     };
     return types[type] || type;
   };
+
+  const nightsRemaining = activeStay
+    ? Math.max(0, Math.ceil((new Date(activeStay.check_out_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
 
   // Group menu items by category
   const menuByCategory = menuItems.reduce((acc, item) => {
@@ -403,11 +510,15 @@ export default function GuestServicesPage() {
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-3">
             <div className="border-2 border-primary p-1.5">
-              <Hotel className="h-5 w-5" />
+              {branding.logo_url ? (
+                <img src={branding.logo_url} alt={branding.hotel_name || 'Hotel logo'} className="h-5 w-5 object-contain" />
+              ) : (
+                <Hotel className="h-5 w-5" />
+              )}
             </div>
             <div>
-              <h1 className="font-bold">HotelOps Guest Portal</h1>
-              <p className="text-xs text-muted-foreground">Welcome, {user?.profile?.full_name || 'Guest'}</p>
+              <h1 className="font-bold">{branding.hotel_name || 'HotelOps Guest Portal'}</h1>
+              <p className="text-xs text-muted-foreground">{branding.welcome_message || `Welcome, ${user?.profile?.full_name || 'Guest'}`}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -419,7 +530,7 @@ export default function GuestServicesPage() {
               </Button>
             )}
             <GuestProfileDialog />
-            <GuestPreferencesDialog />
+            <GuestPreferencesDialog open={showPreferences} onOpenChange={setShowPreferences} />
             <Button variant="outline" onClick={() => setShowConcierge(true)}>
               <Sparkles className="h-4 w-4 mr-2" />
               AI Concierge
@@ -437,8 +548,12 @@ export default function GuestServicesPage() {
           <p className="text-muted-foreground">Browse available rooms, order food, and access hotel services</p>
         </div>
 
-        <Tabs defaultValue="rooms" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 border-2">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList className="grid w-full grid-cols-3 border-2 sm:grid-cols-6">
+            <TabsTrigger value="my-stay" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <Home className="mr-2 h-4 w-4" />
+              My Stay
+            </TabsTrigger>
             <TabsTrigger value="rooms" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Bed className="mr-2 h-4 w-4" />
               Rooms
@@ -460,6 +575,86 @@ export default function GuestServicesPage() {
               Billing
             </TabsTrigger>
           </TabsList>
+
+          {/* My Stay Tab */}
+          <TabsContent value="my-stay" className="space-y-6">
+            {activeStay ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold">Current Stay</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Room {activeStay.rooms?.room_number || activeStay.room_id}
+                    </p>
+                  </div>
+                  <Badge variant="secondary">{nightsRemaining} night{nightsRemaining === 1 ? '' : 's'} remaining</Badge>
+                </div>
+
+                <Card className="border-2">
+                  <CardHeader>
+                    <CardTitle>Room {activeStay.rooms?.room_number || activeStay.room_id}</CardTitle>
+                    <CardDescription>
+                      {(activeStay.rooms?.room_type && getRoomTypeLabel(activeStay.rooms.room_type)) || 'Hotel room'}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="border-2 border-border p-3">
+                        <p className="text-xs text-muted-foreground">Check in</p>
+                        <p className="font-bold">{new Date(activeStay.check_in_date).toLocaleDateString()}</p>
+                      </div>
+                      <div className="border-2 border-border p-3">
+                        <p className="text-xs text-muted-foreground">Check out</p>
+                        <p className="font-bold">{new Date(activeStay.check_out_date).toLocaleDateString()}</p>
+                      </div>
+                      <div className="border-2 border-border p-3">
+                        <p className="text-xs text-muted-foreground">Folio balance</p>
+                        <p className="font-bold">{formatMoney(Number(activeStay.total_amount || 0))}</p>
+                      </div>
+                      <div className="border-2 border-border p-3">
+                        <p className="text-xs text-muted-foreground">Guest</p>
+                        <p className="font-bold">{activeStay.guest_name}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                      <Button onClick={() => setActiveTab('menu')}>
+                        <UtensilsCrossed className="mr-2 h-4 w-4" />
+                        Order Food
+                      </Button>
+                      <Button variant="outline" onClick={() => handleHousekeepingRequest('Guest requested housekeeping from My Stay')}>
+                        <Coffee className="mr-2 h-4 w-4" />
+                        Request Housekeeping
+                      </Button>
+                      <Button variant="outline" onClick={() => setActiveTab('services')}>
+                        <MessageSquare className="mr-2 h-4 w-4" />
+                        Report Issue
+                      </Button>
+                      <Button variant="outline" onClick={() => setActiveTab('billing')}>
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        View Full Bill
+                      </Button>
+                      <Button variant="outline" onClick={handleRequestCheckout}>
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Request Checkout
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            ) : (
+              <Card className="border-2">
+                <CardContent className="flex flex-col items-center justify-center gap-4 py-10 text-center">
+                  <Bed className="h-8 w-8 text-muted-foreground" />
+                  <div>
+                    <h3 className="font-bold">No active stay yet</h3>
+                    <p className="text-sm text-muted-foreground">Book or hold a room to unlock in-stay services.</p>
+                  </div>
+                  <Button onClick={() => setActiveTab('rooms')}>Browse Rooms</Button>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
 
           {/* Rooms Tab */}
           <TabsContent value="rooms" className="space-y-6">
@@ -486,7 +681,7 @@ export default function GuestServicesPage() {
                       <div className="flex items-start justify-between">
                         <div>
                           <CardTitle className="text-lg">Room {room.room_number}</CardTitle>
-                          <CardDescription>{getRoomTypeLabel(room.room_type)} • Floor {room.floor}</CardDescription>
+                          <CardDescription>{getRoomTypeLabel(room.room_type)} - Floor {room.floor}</CardDescription>
                         </div>
                         <Badge variant="outline" className="bg-primary/10">
                           {formatMoney(room.price_per_night * exchangeRate)}/night
@@ -632,9 +827,14 @@ export default function GuestServicesPage() {
                             </div>
 
                             <div className="sticky bottom-0 -mx-4 border-t-2 border-border bg-background px-4 pb-1 pt-3 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
-                              {!paymentConfig?.stripe_configured && (
+                              {paymentConfig?.active_gateway && paymentConfig.active_gateway !== 'stripe' && (
                                 <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
-                                  Stripe needs `STRIPE_SECRET_KEY` in the backend `.env`. Use Hold Room until it is added.
+                                  {paymentConfig.active_gateway.replace('_', ' ')} is selected for this hotel. Use Hold Room or pay at reception.
+                                </p>
+                              )}
+                              {(!paymentConfig?.active_gateway || paymentConfig.active_gateway === 'stripe') && !paymentConfig?.stripe_configured && (
+                                <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
+                                  Stripe needs keys in Portal Settings. Use Hold Room until it is configured.
                                 </p>
                               )}
                               {paymentConfig?.stripe_configured && paymentConfig.mode_matches === false && (
@@ -643,7 +843,7 @@ export default function GuestServicesPage() {
                                 </p>
                               )}
                               <div className="grid gap-2 sm:grid-cols-2">
-                                <Button className="w-full" onClick={() => handleStripeBooking(room)} disabled={isCheckingOut || isRateLoading || !paymentConfig?.stripe_configured || paymentConfig.mode_matches === false}>
+                                <Button className="w-full" onClick={() => handleStripeBooking(room)} disabled={isCheckingOut || isRateLoading || (paymentConfig?.active_gateway || 'stripe') !== 'stripe' || !paymentConfig?.stripe_configured || paymentConfig.mode_matches === false}>
                                   {isCheckingOut ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
                                   Pay & Book
                                 </Button>
@@ -673,6 +873,10 @@ export default function GuestServicesPage() {
                 price: item.price,
                 category: item.category_name || 'Other',
               }))}
+              preferences={preferences}
+              autoSuggest
+              formatMoney={(amount) => formatMoney(amount * exchangeRate)}
+              onOpenPreferences={() => setShowPreferences(true)}
               onSelectItem={(itemId) => {
                 const item = menuItems.find(i => i.id === itemId);
                 if (item) addToCart(item);
@@ -777,10 +981,33 @@ export default function GuestServicesPage() {
                   <p className="text-sm text-muted-foreground mb-4">
                     Request extra towels, pillows, toiletries, or cleaning service.
                   </p>
-                  <Button variant="outline" className="w-full">
-                    <CheckCircle2 className="mr-2 h-4 w-4" />
-                    Request Housekeeping
-                  </Button>
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button variant="outline" className="w-full">
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Request Housekeeping
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="border-2">
+                      <DialogHeader>
+                        <DialogTitle>Request Housekeeping</DialogTitle>
+                        <DialogDescription>
+                          Tell the team what you need for Room {activeStay?.rooms?.room_number || ''}.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <Textarea
+                          value={housekeepingNotes}
+                          onChange={(event) => setHousekeepingNotes(event.target.value)}
+                          placeholder="Extra towels, room cleaning, toiletries..."
+                          className="border-2"
+                        />
+                        <Button className="w-full" onClick={() => handleHousekeepingRequest()}>
+                          Send Request
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
                 </CardContent>
               </Card>
 

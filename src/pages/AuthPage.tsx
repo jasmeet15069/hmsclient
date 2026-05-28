@@ -15,6 +15,9 @@ export default function AuthPage({ portal }: AuthPageProps) {
   const { user, loading, signOut } = useAuth();
   const isClientPortal = portal === 'client';
   const portalTitle = isClientPortal ? 'Guest Portal' : 'Staff Portal';
+  const staffLoginUrl =
+    import.meta.env.VITE_STAFF_LOGIN_URL ||
+    (window.location.hostname === 'localhost' ? 'http://localhost:8081/staff-login' : 'https://hmsadmin.jazverse.online/staff-login');
 
   if (loading) {
     return (
@@ -45,7 +48,7 @@ export default function AuthPage({ portal }: AuthPageProps) {
             <Button onClick={signOut}>Sign out</Button>
             {isClientPortal && (
               <Button variant="outline" asChild>
-                <a href="http://localhost:8081/staff-login">Go to Staff Login</a>
+                <a href={staffLoginUrl}>Go to Staff Login</a>
               </Button>
             )}
           </div>

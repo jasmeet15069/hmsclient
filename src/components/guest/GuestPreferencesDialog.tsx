@@ -9,7 +9,12 @@ import { useGuestPreferences } from '@/hooks/useGuestPreferences';
 import { COUNTRY_OPTIONS, DEFAULT_COUNTRY, getCountryOption } from '@/lib/currency';
 import { Settings, Loader2, Heart, AlertTriangle, Utensils, Globe2 } from 'lucide-react';
 
-export function GuestPreferencesDialog() {
+interface GuestPreferencesDialogProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export function GuestPreferencesDialog({ open, onOpenChange }: GuestPreferencesDialogProps = {}) {
   const {
     preferences,
     isLoading,
@@ -20,7 +25,9 @@ export function GuestPreferencesDialog() {
     CATEGORY_OPTIONS,
   } = useGuestPreferences();
 
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = open ?? internalOpen;
+  const setIsOpen = onOpenChange ?? setInternalOpen;
   const [dietary, setDietary] = useState<string[]>([]);
   const [allergies, setAllergies] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
