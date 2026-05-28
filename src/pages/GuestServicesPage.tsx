@@ -114,6 +114,16 @@ const dateInputValue = (offsetDays: number) => {
   return date.toISOString().split('T')[0];
 };
 
+const authHeaders = () => {
+  try {
+    const rawSession = localStorage.getItem('hotel_harmony_session');
+    const session = rawSession ? JSON.parse(rawSession) : null;
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+  } catch {
+    return {};
+  }
+};
+
 export default function GuestServicesPage() {
   const { user, signOut, isStaff } = useAuth();
   const { toast } = useToast();
@@ -354,7 +364,7 @@ export default function GuestServicesPage() {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/bookings/checkout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           user_id: user.id,
           country: selectedCountry.country,
@@ -448,7 +458,7 @@ export default function GuestServicesPage() {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/housekeeping/guest-requests`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           guest_stay_id: activeStay.id,
           request_type: 'guest_request',

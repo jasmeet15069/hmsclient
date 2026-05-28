@@ -34,6 +34,16 @@ interface Payment {
 
 const apiBase = import.meta.env.VITE_API_URL || '/api';
 
+const authHeaders = () => {
+  try {
+    const rawSession = localStorage.getItem('hotel_harmony_session');
+    const session = rawSession ? JSON.parse(rawSession) : null;
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+  } catch {
+    return {};
+  }
+};
+
 export function GuestBillingTab() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -108,7 +118,7 @@ export function GuestBillingTab() {
 
     fetch(`${apiBase}/payments/complete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ payment_id: paymentId, session_id: sessionId }),
     })
       .then(response => response.json().then(payload => ({ response, payload })))
@@ -142,7 +152,7 @@ export function GuestBillingTab() {
     try {
       const response = await fetch(`${apiBase}/payments/checkout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ payment_id: payment.id, currency: selectedCountry.currency, country: selectedCountry.country }),
       });
       const payload = await response.json();

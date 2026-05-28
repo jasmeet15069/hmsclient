@@ -5,6 +5,16 @@ type Message = { role: 'user' | 'assistant'; content: string };
 const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 const CHAT_URL = `${API_URL}/ai/chat`;
 
+const authHeaders = () => {
+  try {
+    const rawSession = localStorage.getItem('hotel_harmony_session');
+    const session = rawSession ? JSON.parse(rawSession) : null;
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+  } catch {
+    return {};
+  }
+};
+
 export function useAIConcierge() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -21,6 +31,7 @@ export function useAIConcierge() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders(),
         },
         body: JSON.stringify({ messages: [...messages, userMsg] }),
       });
