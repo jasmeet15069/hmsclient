@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import AuthPage from "./pages/AuthPage";
 import GuestServicesPage from "./pages/GuestServicesPage";
 import NotFound from "./pages/NotFound";
+import { useHotelBranding } from "@/hooks/useHotelBranding";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,8 @@ function GuestRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutes() {
+  useHotelBranding();
+
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/client-login" replace />} />
