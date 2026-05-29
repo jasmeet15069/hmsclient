@@ -44,14 +44,22 @@ import { Navigate } from 'react-router-dom';
 import { COUNTRY_OPTIONS, formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
 
 interface Room {
-  id: string;
-  room_number: string;
+  id?: string;
+  room_number?: string;
   room_type: string;
-  floor: number;
+  floor?: number;
   capacity: number;
   price_per_night: number;
   status: 'available' | 'occupied' | 'maintenance' | 'cleaning';
   amenities: string[] | null;
+}
+
+interface RoomPackage {
+  room_type: string;
+  capacity: number;
+  price_per_night: number;
+  amenities: string[];
+  available_count: number;
 }
 
 interface MenuItem {
@@ -144,6 +152,7 @@ export default function GuestServicesPage() {
   const [isRateLoading, setIsRateLoading] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
+  const [selectedRoomType, setSelectedRoomType] = useState('all');
   const [bookingDetails, setBookingDetails] = useState({
     guestName: user?.profile?.full_name || '',
     guestEmail: user?.email || '',
@@ -223,9 +232,9 @@ export default function GuestServicesPage() {
       // Fetch available rooms
       const { data: roomsData } = await supabase
         .from('rooms')
-        .select('*')
+        .select('room_type, capacity, price_per_night, status, amenities')
         .eq('status', 'available')
-        .order('room_number');
+        .order('room_type');
 
       setRooms(roomsData || []);
 
@@ -321,7 +330,7 @@ export default function GuestServicesPage() {
     return formatCurrency(amount, option);
   };
 
-  const handleStripeBooking = async (room: Room) => {
+  const handleStripeBooking = async (roomPackage: RoomPackage) => {
     if (!user?.id) return;
 
     if (paymentConfig?.active_gateway && paymentConfig.active_gateway !== 'stripe') {
@@ -375,7 +384,7 @@ export default function GuestServicesPage() {
           guest_phone: bookingDetails.guestPhone,
           check_in_date: bookingDetails.checkInDate,
           check_out_date: bookingDetails.checkOutDate,
-          room_id: room.id,
+          room_type: roomPackage.room_type,
         }),
       });
       const payload = await response.json();
@@ -393,55 +402,54 @@ export default function GuestServicesPage() {
     }
   };
 
-  const handleManualBooking = async (room: Room) => {
+  const handleManualBooking = async (roomPackage: RoomPackage) => {
     if (!user?.id) return;
 
-    try {
-      const { data: stay, error: stayError } = await supabase.from('guest_stays').insert({
-        guest_id: user.id,
-        room_id: room.id,
-        guest_name: bookingDetails.guestName || user.profile?.full_name || user.email,
-        guest_email: bookingDetails.guestEmail || user.email,
-        guest_phone: bookingDetails.guestPhone,
-        check_in_date: bookingDetails.checkInDate,
-        check_out_date: bookingDetails.checkOutDate,
-        total_amount: room.price_per_night * bookingNights,
-        notes: 'Manual guest portal booking',
-      }).single();
-
-      if (stayError) throw stayError;
-
-      const { error: paymentError } = await supabase.from('payments').insert({
-        payment_number: `PAY-${Date.now().toString().slice(-8)}`,
-        guest_stay_id: stay.id,
-        amount: room.price_per_night * bookingNights,
-        payment_method: 'cash',
-        status: 'pending',
-        processed_by: user.id,
-        notes: `Room ${room.room_number} hold created from guest portal`,
+    if (!bookingDetails.guestName || !bookingDetails.guestEmail || !bookingDetails.checkInDate || !bookingDetails.checkOutDate) {
+      toast({
+        title: 'Missing booking details',
+        description: 'Please enter guest details and stay dates before holding a room.',
+        variant: 'destructive',
       });
+      return;
+    }
 
-      if (paymentError) throw paymentError;
-
-      const { error: roomError } = await supabase
-        .from('rooms')
-        .update({ status: 'occupied' })
-        .eq('id', room.id);
-
-      if (roomError) throw roomError;
+    setIsCheckingOut(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/bookings/hold`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          user_id: user.id,
+          country: selectedCountry.country,
+          currency: selectedCountry.currency,
+          ...bookingDetails,
+          guest_name: bookingDetails.guestName,
+          guest_email: bookingDetails.guestEmail,
+          guest_phone: bookingDetails.guestPhone,
+          check_in_date: bookingDetails.checkInDate,
+          check_out_date: bookingDetails.checkOutDate,
+          room_type: roomPackage.room_type,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || 'Unable to hold this room type');
 
       toast({
-        title: 'Room booked',
-        description: `Room ${room.room_number} has been manually booked for tonight.`,
+        title: 'Room held',
+        description: `A ${getRoomTypeLabel(roomPackage.room_type)} room has been held. Your assigned room number is now visible in My Stay.`,
       });
       await fetchData();
+      setActiveTab('my-stay');
     } catch (error) {
       console.error('Error booking room:', error);
       toast({
         title: 'Booking failed',
-        description: 'Unable to complete the manual booking. Please try again.',
+        description: error instanceof Error ? error.message : 'Unable to complete the booking hold. Please try again.',
         variant: 'destructive',
       });
+    } finally {
+      setIsCheckingOut(false);
     }
   };
 
@@ -496,9 +504,14 @@ export default function GuestServicesPage() {
       standard: 'Standard',
       deluxe: 'Deluxe',
       suite: 'Suite',
+      penthouse: 'Penthouse',
       presidential: 'Presidential Suite',
     };
-    return types[type] || type;
+    const normalized = (type || '').toLowerCase();
+    if (types[normalized]) return types[normalized];
+    return normalized
+      ? normalized.split(/[\s_-]+/).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
+      : 'Room';
   };
 
   const nightsRemaining = activeStay
@@ -512,6 +525,37 @@ export default function GuestServicesPage() {
     acc[category].push(item);
     return acc;
   }, {} as Record<string, MenuItem[]>);
+
+  const roomTypeOrder = ['standard', 'deluxe', 'suite', 'penthouse', 'presidential'];
+  const roomPackages = Object.values(rooms.reduce((acc, room) => {
+    const key = (room.room_type || 'standard').toLowerCase();
+    const amenities = Array.isArray(room.amenities) ? room.amenities : [];
+    if (!acc[key]) {
+      acc[key] = {
+        room_type: key,
+        capacity: Number(room.capacity) || 1,
+        price_per_night: Number(room.price_per_night) || 0,
+        amenities: [],
+        available_count: 0,
+      };
+    }
+
+    acc[key].capacity = Math.max(acc[key].capacity, Number(room.capacity) || 1);
+    acc[key].price_per_night = Math.min(acc[key].price_per_night || Number(room.price_per_night), Number(room.price_per_night) || 0);
+    acc[key].amenities = Array.from(new Set([...acc[key].amenities, ...amenities]));
+    acc[key].available_count += 1;
+    return acc;
+  }, {} as Record<string, RoomPackage>)).sort((a, b) => {
+    const aOrder = roomTypeOrder.indexOf(a.room_type);
+    const bOrder = roomTypeOrder.indexOf(b.room_type);
+    if (aOrder !== -1 || bOrder !== -1) {
+      return (aOrder === -1 ? 99 : aOrder) - (bOrder === -1 ? 99 : bOrder);
+    }
+    return getRoomTypeLabel(a.room_type).localeCompare(getRoomTypeLabel(b.room_type));
+  });
+  const displayedRoomPackages = selectedRoomType === 'all'
+    ? roomPackages
+    : roomPackages.filter(roomPackage => roomPackage.room_type === selectedRoomType);
 
   return (
     <div className="min-h-screen bg-background">
@@ -669,51 +713,82 @@ export default function GuestServicesPage() {
           {/* Rooms Tab */}
           <TabsContent value="rooms" className="space-y-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold">Available Rooms</h3>
+              <div>
+                <h3 className="text-lg font-bold">Available Room Types</h3>
+                <p className="text-sm text-muted-foreground">Choose a room type. Your exact room number is assigned after booking.</p>
+              </div>
               <Badge variant="secondary">{rooms.length} rooms available</Badge>
+            </div>
+            <div className="grid gap-2 sm:max-w-xs">
+              <Label>Room Type</Label>
+              <Select value={selectedRoomType} onValueChange={setSelectedRoomType}>
+                <SelectTrigger className="border-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Room Types</SelectItem>
+                  {roomPackages.map(roomPackage => (
+                    <SelectItem key={roomPackage.room_type} value={roomPackage.room_type}>
+                      {getRoomTypeLabel(roomPackage.room_type)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             
             {loading ? (
               <div className="flex justify-center py-8">
                 <div className="animate-pulse text-muted-foreground">Loading rooms...</div>
               </div>
-            ) : rooms.length === 0 ? (
+            ) : roomPackages.length === 0 ? (
               <Card className="border-2">
                 <CardContent className="py-8 text-center text-muted-foreground">
                   No rooms currently available. Please contact reception.
                 </CardContent>
               </Card>
+            ) : displayedRoomPackages.length === 0 ? (
+              <Card className="border-2">
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  This room type is not currently available. Please choose another type.
+                </CardContent>
+              </Card>
             ) : (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {rooms.map(room => (
-                  <Card key={room.id} className="border-2">
+                {displayedRoomPackages.map(roomPackage => (
+                  <Card key={roomPackage.room_type} className="border-2">
                     <CardHeader>
                       <div className="flex items-start justify-between">
                         <div>
-                          <CardTitle className="text-lg">Room {room.room_number}</CardTitle>
-                          <CardDescription>{getRoomTypeLabel(room.room_type)} - Floor {room.floor}</CardDescription>
+                          <CardTitle className="text-lg">{getRoomTypeLabel(roomPackage.room_type)} Room</CardTitle>
+                          <CardDescription>Automatically assigned after booking</CardDescription>
                         </div>
                         <Badge variant="outline" className="bg-primary/10">
-                          {formatMoney(room.price_per_night * exchangeRate)}/night
+                          {formatMoney(roomPackage.price_per_night * exchangeRate)}/night
                         </Badge>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Users className="h-4 w-4" />
-                        <span>Up to {room.capacity} guests</span>
+                      <div className="grid gap-2 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4" />
+                          <span>Up to {roomPackage.capacity} guests</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4" />
+                          <span>{roomPackage.available_count} available for auto-assignment</span>
+                        </div>
                       </div>
                       
-                      {room.amenities && room.amenities.length > 0 && (
+                      {roomPackage.amenities.length > 0 && (
                         <div className="flex flex-wrap gap-1">
-                          {room.amenities.slice(0, 4).map(amenity => (
+                          {roomPackage.amenities.slice(0, 4).map(amenity => (
                             <Badge key={amenity} variant="secondary" className="text-xs">
                               {amenity}
                             </Badge>
                           ))}
-                          {room.amenities.length > 4 && (
+                          {roomPackage.amenities.length > 4 && (
                             <Badge variant="secondary" className="text-xs">
-                              +{room.amenities.length - 4} more
+                              +{roomPackage.amenities.length - 4} more
                             </Badge>
                           )}
                         </div>
@@ -723,33 +798,33 @@ export default function GuestServicesPage() {
                         <DialogTrigger asChild>
                           <Button className="w-full">
                             <Calendar className="mr-2 h-4 w-4" />
-                            Book Room
+                            Book This Type
                           </Button>
                         </DialogTrigger>
                         <DialogContent className="max-h-[92vh] w-[calc(100vw-1.5rem)] max-w-md overflow-y-auto border-2 p-4 sm:max-w-lg sm:p-5">
                           <DialogHeader className="space-y-1 text-left">
-                            <DialogTitle className="text-base sm:text-lg">Book Room {room.room_number}</DialogTitle>
+                            <DialogTitle className="text-base sm:text-lg">Book {getRoomTypeLabel(roomPackage.room_type)} Room</DialogTitle>
                             <DialogDescription className="text-xs sm:text-sm">
-                              Enter stay details and confirm your booking.
+                              Enter stay details. We will assign an available room automatically.
                             </DialogDescription>
                           </DialogHeader>
                           <div className="space-y-3 pt-2">
                             <div className="grid grid-cols-2 gap-2 border-2 border-border p-3 text-xs sm:text-sm">
                               <div>
-                                <p className="text-muted-foreground">Room</p>
-                                <p className="font-medium">{room.room_number}</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Location</p>
-                                <p className="font-medium">Floor {room.floor}</p>
-                              </div>
-                              <div>
                                 <p className="text-muted-foreground">Type</p>
-                                <p className="font-medium">{getRoomTypeLabel(room.room_type)}</p>
+                                <p className="font-medium">{getRoomTypeLabel(roomPackage.room_type)}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Assignment</p>
+                                <p className="font-medium">After booking</p>
                               </div>
                               <div>
                                 <p className="text-muted-foreground">Capacity</p>
-                                <p className="font-medium">Up to {room.capacity} guests</p>
+                                <p className="font-medium">Up to {roomPackage.capacity} guests</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground">Available</p>
+                                <p className="font-medium">{roomPackage.available_count} room{roomPackage.available_count === 1 ? '' : 's'}</p>
                               </div>
                             </div>
 
@@ -817,7 +892,7 @@ export default function GuestServicesPage() {
                             <div className="space-y-1.5 border-2 border-border p-3">
                               <div className="flex justify-between text-sm">
                                 <span>Base rate</span>
-                                <span>{formatMoney(room.price_per_night, 'USD')} / night</span>
+                                <span>{formatMoney(roomPackage.price_per_night, 'USD')} / night</span>
                               </div>
                               <div className="flex justify-between text-sm">
                                 <span>Nights</span>
@@ -829,10 +904,10 @@ export default function GuestServicesPage() {
                               </div>
                               <div className="flex justify-between border-t pt-2 text-lg font-bold">
                                 <span>Total</span>
-                                <span>{formatMoney(room.price_per_night * bookingNights * exchangeRate)}</span>
+                                <span>{formatMoney(roomPackage.price_per_night * bookingNights * exchangeRate)}</span>
                               </div>
                               <p className="text-xs text-muted-foreground">
-                                Stripe collects payment in {selectedCountry.currency}.
+                                Stripe collects payment in {selectedCountry.currency}. Room number appears after booking.
                               </p>
                             </div>
 
@@ -853,13 +928,13 @@ export default function GuestServicesPage() {
                                 </p>
                               )}
                               <div className="grid gap-2 sm:grid-cols-2">
-                                <Button className="w-full" onClick={() => handleStripeBooking(room)} disabled={isCheckingOut || isRateLoading || (paymentConfig?.active_gateway || 'stripe') !== 'stripe' || !paymentConfig?.stripe_configured || paymentConfig.mode_matches === false}>
+                                <Button className="w-full" onClick={() => handleStripeBooking(roomPackage)} disabled={isCheckingOut || isRateLoading || (paymentConfig?.active_gateway || 'stripe') !== 'stripe' || !paymentConfig?.stripe_configured || paymentConfig.mode_matches === false}>
                                   {isCheckingOut ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
                                   Pay & Book
                                 </Button>
-                                <Button className="w-full" variant="outline" onClick={() => handleManualBooking(room)} disabled={isCheckingOut}>
+                                <Button className="w-full" variant="outline" onClick={() => handleManualBooking(roomPackage)} disabled={isCheckingOut}>
                                   <CheckCircle2 className="mr-2 h-4 w-4" />
-                                  Hold Room
+                                  Hold Type
                                 </Button>
                               </div>
                             </div>
