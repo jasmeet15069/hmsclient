@@ -114,6 +114,36 @@ interface PaymentConfig {
   active_gateway?: 'none' | 'stripe' | 'razorpay' | 'cash' | 'card' | 'bank_transfer';
   default_currency?: string;
   razorpay_configured?: boolean;
+  razorpay_key_id?: string;
+}
+
+interface RazorpayCheckoutResponse {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}
+
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  prefill: {
+    name: string;
+    email: string;
+    contact: string;
+  };
+  theme?: { color?: string };
+  handler: (response: RazorpayCheckoutResponse) => void;
+  modal?: { ondismiss?: () => void };
+}
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: RazorpayOptions) => { open: () => void };
+  }
 }
 
 const dateInputValue = (offsetDays: number) => {
@@ -131,6 +161,25 @@ const authHeaders = () => {
     return {};
   }
 };
+
+const loadRazorpayScript = () => new Promise<void>((resolve, reject) => {
+  if (window.Razorpay) {
+    resolve();
+    return;
+  }
+  const existing = document.querySelector<HTMLScriptElement>('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+  if (existing) {
+    existing.addEventListener('load', () => resolve(), { once: true });
+    existing.addEventListener('error', () => reject(new Error('Unable to load Razorpay Checkout.')), { once: true });
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+  script.async = true;
+  script.onload = () => resolve();
+  script.onerror = () => reject(new Error('Unable to load Razorpay Checkout.'));
+  document.body.appendChild(script);
+});
 
 export default function GuestServicesPage() {
   const { user, signOut, isStaff } = useAuth();
@@ -324,6 +373,7 @@ export default function GuestServicesPage() {
   );
 
   const selectedCountry = COUNTRY_OPTIONS.find(option => option.country === bookingCountry) || COUNTRY_OPTIONS[0];
+  const activeGateway = paymentConfig?.active_gateway || 'stripe';
 
   const formatMoney = (amount: number, currency = selectedCountry.currency) => {
     const option = currency === selectedCountry.currency ? selectedCountry : getCountryOption(null, currency);
@@ -400,6 +450,138 @@ export default function GuestServicesPage() {
     } finally {
       setIsCheckingOut(false);
     }
+  };
+
+  const handleRazorpayBooking = async (roomPackage: RoomPackage) => {
+    if (!user?.id) return;
+
+    if (!paymentConfig?.razorpay_configured || !paymentConfig.razorpay_key_id) {
+      toast({
+        title: 'Razorpay is not configured',
+        description: 'Ask the hotel admin to add Razorpay test or live keys in Portal Settings > Payments.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (selectedCountry.currency !== 'INR') {
+      toast({
+        title: 'Select INR for Razorpay',
+        description: 'This hotel is using Razorpay, so online payment is available in India (INR).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!bookingDetails.guestName || !bookingDetails.guestEmail || !bookingDetails.checkInDate || !bookingDetails.checkOutDate) {
+      toast({
+        title: 'Missing booking details',
+        description: 'Please enter guest details and stay dates before payment.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsCheckingOut(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/bookings/razorpay/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          user_id: user.id,
+          country: selectedCountry.country,
+          currency: selectedCountry.currency,
+          ...bookingDetails,
+          guest_name: bookingDetails.guestName,
+          guest_email: bookingDetails.guestEmail,
+          guest_phone: bookingDetails.guestPhone,
+          check_in_date: bookingDetails.checkInDate,
+          check_out_date: bookingDetails.checkOutDate,
+          room_type: roomPackage.room_type,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || 'Unable to create Razorpay order');
+
+      await loadRazorpayScript();
+      const order = payload.data;
+
+      await new Promise<void>((resolve, reject) => {
+        const Razorpay = window.Razorpay;
+        if (!Razorpay) {
+          reject(new Error('Razorpay Checkout is unavailable.'));
+          return;
+        }
+        const checkout = new Razorpay({
+          key: order.key_id,
+          amount: Number(order.amount),
+          currency: order.currency,
+          name: branding.hotel_name || 'HotelOps',
+          description: order.description || 'Hotel room booking',
+          order_id: order.order_id,
+          prefill: {
+            name: bookingDetails.guestName,
+            email: bookingDetails.guestEmail,
+            contact: bookingDetails.guestPhone,
+          },
+          theme: { color: branding.client_primary_color || branding.primary_color || '#000000' },
+          handler: async (razorpayResponse) => {
+            try {
+              const verifyResponse = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/payments/razorpay/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify({
+                  payment_id: order.payment_id,
+                  razorpay_order_id: razorpayResponse.razorpay_order_id,
+                  razorpay_payment_id: razorpayResponse.razorpay_payment_id,
+                  razorpay_signature: razorpayResponse.razorpay_signature,
+                }),
+              });
+              const verifyPayload = await verifyResponse.json();
+              if (!verifyResponse.ok || verifyPayload.error) {
+                throw new Error(verifyPayload.error || 'Unable to verify Razorpay payment');
+              }
+              toast({
+                title: 'Payment completed',
+                description: 'Your room booking has been paid and confirmed.',
+              });
+              await fetchData();
+              setActiveTab('my-stay');
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              toast({
+                title: 'Payment cancelled',
+                description: 'Your room is still pending payment. You can try again from Billing.',
+              });
+              resolve();
+            },
+          },
+        });
+        checkout.open();
+      });
+    } catch (error) {
+      console.error('Error starting Razorpay checkout:', error);
+      toast({
+        title: 'Payment setup failed',
+        description: error instanceof Error ? error.message : 'Unable to start Razorpay Checkout.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
+  const handleOnlineBooking = (roomPackage: RoomPackage) => {
+    if (activeGateway === 'razorpay') {
+      void handleRazorpayBooking(roomPackage);
+      return;
+    }
+    void handleStripeBooking(roomPackage);
   };
 
   const handleManualBooking = async (roomPackage: RoomPackage) => {
@@ -556,6 +738,11 @@ export default function GuestServicesPage() {
   const displayedRoomPackages = selectedRoomType === 'all'
     ? roomPackages
     : roomPackages.filter(roomPackage => roomPackage.room_type === selectedRoomType);
+  const canUseOnlinePayment = activeGateway === 'razorpay'
+    ? Boolean(paymentConfig?.razorpay_configured && paymentConfig?.razorpay_key_id && selectedCountry.currency === 'INR')
+    : activeGateway === 'stripe' && Boolean(paymentConfig?.stripe_configured && paymentConfig?.mode_matches !== false);
+  const onlinePaymentLabel = activeGateway === 'razorpay' ? 'Pay with Razorpay' : 'Pay & Book';
+  const paymentProviderLabel = activeGateway === 'razorpay' ? 'Razorpay' : 'Stripe';
 
   return (
     <div className="min-h-screen bg-background">
@@ -907,30 +1094,40 @@ export default function GuestServicesPage() {
                                 <span>{formatMoney(roomPackage.price_per_night * bookingNights * exchangeRate)}</span>
                               </div>
                               <p className="text-xs text-muted-foreground">
-                                Stripe collects payment in {selectedCountry.currency}. Room number appears after booking.
+                                {paymentProviderLabel} collects payment in {selectedCountry.currency}. Room number appears after booking.
                               </p>
                             </div>
 
                             <div className="sticky bottom-0 -mx-4 border-t-2 border-border bg-background px-4 pb-1 pt-3 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
-                              {paymentConfig?.active_gateway && paymentConfig.active_gateway !== 'stripe' && (
+                              {activeGateway === 'razorpay' && !paymentConfig?.razorpay_configured && (
                                 <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
-                                  {paymentConfig.active_gateway.replace('_', ' ')} is selected for this hotel. Use Hold Room or pay at reception.
+                                  Razorpay needs Key ID and Secret in Portal Settings. Use Hold Type until it is configured.
                                 </p>
                               )}
-                              {(!paymentConfig?.active_gateway || paymentConfig.active_gateway === 'stripe') && !paymentConfig?.stripe_configured && (
+                              {activeGateway === 'razorpay' && paymentConfig?.razorpay_configured && selectedCountry.currency !== 'INR' && (
+                                <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
+                                  Razorpay online checkout is available in INR. Select India (INR) to pay online.
+                                </p>
+                              )}
+                              {activeGateway !== 'stripe' && activeGateway !== 'razorpay' && (
+                                <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
+                                  {activeGateway.replace('_', ' ')} is selected for this hotel. Use Hold Type or pay at reception.
+                                </p>
+                              )}
+                              {activeGateway === 'stripe' && !paymentConfig?.stripe_configured && (
                                 <p className="mb-2 border-2 border-amber-500 bg-amber-50 p-2 text-xs text-amber-800">
                                   Stripe needs keys in Portal Settings. Use Hold Room until it is configured.
                                 </p>
                               )}
-                              {paymentConfig?.stripe_configured && paymentConfig.mode_matches === false && (
+                              {activeGateway === 'stripe' && paymentConfig?.stripe_configured && paymentConfig.mode_matches === false && (
                                 <p className="mb-2 border-2 border-destructive bg-destructive/5 p-2 text-xs text-destructive">
                                   Stripe public and secret keys are in different modes.
                                 </p>
                               )}
                               <div className="grid gap-2 sm:grid-cols-2">
-                                <Button className="w-full" onClick={() => handleStripeBooking(roomPackage)} disabled={isCheckingOut || isRateLoading || (paymentConfig?.active_gateway || 'stripe') !== 'stripe' || !paymentConfig?.stripe_configured || paymentConfig.mode_matches === false}>
+                                <Button className="w-full" onClick={() => handleOnlineBooking(roomPackage)} disabled={isCheckingOut || isRateLoading || !canUseOnlinePayment}>
                                   {isCheckingOut ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
-                                  Pay & Book
+                                  {onlinePaymentLabel}
                                 </Button>
                                 <Button className="w-full" variant="outline" onClick={() => handleManualBooking(roomPackage)} disabled={isCheckingOut}>
                                   <CheckCircle2 className="mr-2 h-4 w-4" />

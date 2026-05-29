@@ -7,6 +7,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { useGuestPreferences } from '@/hooks/useGuestPreferences';
+import { useHotelBranding } from '@/hooks/useHotelBranding';
 import { formatCurrency, getCountryOption, getExchangeRate } from '@/lib/currency';
 import { CreditCard, Loader2, Receipt, RefreshCw } from 'lucide-react';
 
@@ -32,7 +33,63 @@ interface Payment {
   guest_stays?: { guest_id?: string; guest_name: string; rooms?: { room_number: string } | null } | null;
 }
 
+interface PaymentConfig {
+  stripe_configured: boolean;
+  mode_matches: boolean;
+  active_gateway?: 'none' | 'stripe' | 'razorpay' | 'cash' | 'card' | 'bank_transfer';
+  razorpay_configured?: boolean;
+  razorpay_key_id?: string;
+}
+
+interface RazorpayCheckoutResponse {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}
+
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  prefill: {
+    name: string;
+    email: string;
+    contact: string;
+  };
+  theme?: { color?: string };
+  handler: (response: RazorpayCheckoutResponse) => void;
+  modal?: { ondismiss?: () => void };
+}
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: RazorpayOptions) => { open: () => void };
+  }
+}
+
 const apiBase = import.meta.env.VITE_API_URL || '/api';
+
+const loadRazorpayScript = () => new Promise<void>((resolve, reject) => {
+  if (window.Razorpay) {
+    resolve();
+    return;
+  }
+  const existing = document.querySelector<HTMLScriptElement>('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+  if (existing) {
+    existing.addEventListener('load', () => resolve(), { once: true });
+    existing.addEventListener('error', () => reject(new Error('Unable to load Razorpay Checkout.')), { once: true });
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+  script.async = true;
+  script.onload = () => resolve();
+  script.onerror = () => reject(new Error('Unable to load Razorpay Checkout.'));
+  document.body.appendChild(script);
+});
 
 const authHeaders = () => {
   try {
@@ -48,12 +105,15 @@ export function GuestBillingTab() {
   const { user } = useAuth();
   const { toast } = useToast();
   const { preferences } = useGuestPreferences();
+  const { branding } = useHotelBranding();
   const [stays, setStays] = useState<GuestStay[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPaying, setIsPaying] = useState<string | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
   const [exchangeRate, setExchangeRate] = useState(1);
   const selectedCountry = getCountryOption(preferences?.country, preferences?.currency);
+  const activeGateway = paymentConfig?.active_gateway || 'stripe';
 
   useEffect(() => {
     let cancelled = false;
@@ -111,6 +171,13 @@ export function GuestBillingTab() {
   }, [fetchBilling]);
 
   useEffect(() => {
+    fetch(`${apiBase}/payment-config`)
+      .then(response => response.json())
+      .then(payload => setPaymentConfig(payload.data || null))
+      .catch(() => setPaymentConfig(null));
+  }, []);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const paymentId = params.get('payment_id');
     const sessionId = params.get('session_id');
@@ -147,7 +214,7 @@ export function GuestBillingTab() {
     return acc;
   }, {} as Record<string, Payment[]>), [payments]);
 
-  const handlePayNow = async (payment: Payment) => {
+  const handleStripePayNow = async (payment: Payment) => {
     setIsPaying(payment.id);
     try {
       const response = await fetch(`${apiBase}/payments/checkout`, {
@@ -167,6 +234,104 @@ export function GuestBillingTab() {
     } finally {
       setIsPaying(null);
     }
+  };
+
+  const handleRazorpayNow = async (payment: Payment) => {
+    if (!paymentConfig?.razorpay_configured || !paymentConfig.razorpay_key_id) {
+      toast({
+        title: 'Razorpay is not configured',
+        description: 'Ask the hotel admin to add Razorpay keys in Portal Settings > Payments.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (selectedCountry.currency !== 'INR') {
+      toast({
+        title: 'Select INR for Razorpay',
+        description: 'This hotel uses Razorpay online payments in India (INR).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsPaying(payment.id);
+    try {
+      const response = await fetch(`${apiBase}/payments/razorpay/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ payment_id: payment.id, currency: selectedCountry.currency, country: selectedCountry.country }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || 'Unable to create Razorpay order');
+
+      await loadRazorpayScript();
+      const order = payload.data;
+      await new Promise<void>((resolve, reject) => {
+        const Razorpay = window.Razorpay;
+        if (!Razorpay) {
+          reject(new Error('Razorpay Checkout is unavailable.'));
+          return;
+        }
+        const checkout = new Razorpay({
+          key: order.key_id,
+          amount: Number(order.amount),
+          currency: order.currency,
+          name: branding.hotel_name || 'HotelOps',
+          description: order.description || 'Hotel payment',
+          order_id: order.order_id,
+          prefill: {
+            name: user?.profile?.full_name || '',
+            email: user?.email || '',
+            contact: user?.profile?.phone || '',
+          },
+          theme: { color: branding.client_primary_color || branding.primary_color || '#000000' },
+          handler: async (razorpayResponse) => {
+            try {
+              const verifyResponse = await fetch(`${apiBase}/payments/razorpay/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify({
+                  payment_id: order.payment_id,
+                  razorpay_order_id: razorpayResponse.razorpay_order_id,
+                  razorpay_payment_id: razorpayResponse.razorpay_payment_id,
+                  razorpay_signature: razorpayResponse.razorpay_signature,
+                }),
+              });
+              const verifyPayload = await verifyResponse.json();
+              if (!verifyResponse.ok || verifyPayload.error) throw new Error(verifyPayload.error || 'Unable to verify Razorpay payment');
+              toast({ title: 'Payment completed', description: 'Your payment has been confirmed.' });
+              await fetchBilling();
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              toast({ title: 'Payment cancelled', description: 'You can retry this payment any time.' });
+              resolve();
+            },
+          },
+        });
+        checkout.open();
+      });
+    } catch (error) {
+      toast({
+        title: 'Payment setup failed',
+        description: error instanceof Error ? error.message : 'Unable to start Razorpay Checkout.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsPaying(null);
+    }
+  };
+
+  const handlePayNow = (payment: Payment) => {
+    if (activeGateway === 'razorpay') {
+      void handleRazorpayNow(payment);
+      return;
+    }
+    void handleStripePayNow(payment);
   };
 
   if (isLoading) {
