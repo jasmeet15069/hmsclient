@@ -850,7 +850,7 @@ export default function GuestServicesPage() {
                       </div>
                       <div className="border-2 border-border p-3">
                         <p className="text-xs text-muted-foreground">Folio balance</p>
-                        <p className="font-bold">{formatMoney(Number(activeStay.total_amount || 0))}</p>
+                        <p className="font-bold">{formatMoney(Number(activeStay.total_amount || 0) * exchangeRate)}</p>
                       </div>
                       <div className="border-2 border-border p-3">
                         <p className="text-xs text-muted-foreground">Guest</p>
